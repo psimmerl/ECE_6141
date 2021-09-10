@@ -1,0 +1,9 @@
+*.model
+assignments/completed/datasets/*
+assignments/completed/project/models/*
+*.pyc
+*.root
+*/.ipynb_checkpoints
+*.pdf
+*.zip
+*.out

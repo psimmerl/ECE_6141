@@ -1,7 +1,7 @@
 # Analysis for the Application of Machine Learning to the EIC Synchrotron Radiation
 # Main imports
+import tensorboard
 from keras.backend import dropout, sparse_categorical_crossentropy, categorical_crossentropy
-from numpy.core.fromnumeric import trace
 import tensorflow.keras as keras
 import tensorflow as tf
 import sklearn as skl
@@ -10,74 +10,85 @@ import numpy as np
 from time import localtime
 
 from load_data import load_data
-from keras import layers
+from keras import activations, layers
 from keras import models
 from keras.utils.vis_utils import plot_model
-from sklearn.preprocessing import LabelBinarizer, MultiLabelBinarizer, StandardScaler
+from sklearn.preprocessing import LabelBinarizer, MultiLabelBinarizer, StandardScaler, MinMaxScaler
 import keras_tuner 
 from keras.metrics import AUC
+from keras import activations
 
 fname = "data/SR-PHOTONS-LUND-NOFMT-20bun-for-Andrey-NoAU.events.root"; oname = "NoAU"
 # fname = "data/SR-PHOTONS-LUND-NOFMT-20bun-for-Andrey-AU.events.root"; oname = "AU"
-(X_train, X_test, y_train, y_test), rdf = load_data(fname, 1/2, add_cols=True, upsample=True)#, discard_data=True)
+X_train, X_test, y_train, y_test, rdf = load_data(fname, 1/2, add_cols=True, discard_data=True, upsample=True)#, 
+
+for i in np.unique(y_train):
+    print(i, y_train[y_train == i].shape)
 
 # lb = MultiLabelBinarizer()
-# lb.fit(np.r_[y_train,y_test])
 lb = LabelBinarizer() 
-lb.fit(sorted(np.unique(np.append(y_train,y_test))))
+lb.fit(sorted(y_train))
 
-scaler = StandardScaler() 
-scaler.fit(np.r_[X_train,X_test])
+scaler = MinMaxScaler(feature_range=(-1,1)) #StandardScaler()#
+scaler.fit(X_train)
 
 def my_model(input_dim, n_outputs):
-    n_layers = 5
-    units = 512
+    n_layers = 3
+    units = 128
     dropout = 0.1
 
     model = models.Sequential()
     
     model.add(layers.Dense(units, activation='relu', input_dim=input_dim))
-    model.add(layers.Dropout(dropout))
+    # model.add(layers.Dropout(dropout))
     
     for layer in range(n_layers-1):
         model.add(layers.Dense(units, activation='relu'))
-        model.add(layers.Dropout(dropout))
+        # model.add(layers.Dropout(dropout))
 
-    model.add(layers.Dense(n_outputs, activation='softmax'))
+    model.add(layers.Dense(n_outputs, activation='sigmoid'))
     model.compile(optimizer="adam", loss='categorical_crossentropy', metrics=['accuracy', 'AUC'])
     return model
 
 
 def my_hp_model(hp, input_dim=X_train.shape[1], n_outputs=len(lb.classes_)):
-    n_layers = hp.Int('layers', min_value=1, max_value=20, step=1)
-    units    = hp.Int('units', min_value=64, max_value=1024, step=64)
-    dropout  = hp.Choice('dropout', [0., 0.1, 0.2, 0.3, 0.4])
+    n_layers = hp.Int('layers', min_value=1, max_value=8, step=1)
+    units    = hp.Choice('units', [32, 64, 96, 128, 192, 256, 384, 512, 768, 1024])
+    # (norm, dropout)  = hp.Choice('norm_dropout', [(True, 0.), (False, 0.), (False, 0.1), (False, 0.2), (False, 0.3)])
+    dropout  = hp.Choice('dropout', [0., 0.1, 0.2, 0.3])
+    # norm     = hp.Choice('batch_norm', [True, False]) 
+    activate = hp.Choice('activation', ["relu","leaky_relu"])
+    fin_act = hp.Choice('final_act', ['sigmoid', 'softmax'])
     
     model = models.Sequential()
-    
-    model.add(layers.Dense(units, activation='relu', input_dim=input_dim))
-    model.add(layers.Dropout(dropout))
+    model.add(layers.InputLayer(input_dim))
+    for l in range(n_layers+1):
+        model.add(layers.Dense(units))
+        if not dropout:
+            model.add(layers.BatchNormalization())
 
-    for l in range(n_layers-1):
-        model.add(layers.Dense(units, activation='relu'))
-        # model.add(layers.BatchNormalization())
-        model.add(layers.Dropout(dropout))
+        if activate == "relu":
+            model.add(layers.ReLU())
+        else:
+            model.add(layers.LeakyReLU())
 
-    model.add(layers.Dense(n_outputs, activation='softmax'))
+        if dropout:
+            model.add(layers.Dropout(dropout))
+
+    model.add(layers.Dense(n_outputs, activation=fin_act))
     model.compile(optimizer="adam", loss='categorical_crossentropy', metrics=['accuracy', 'AUC'])
     return model
     
-
+t = localtime()
+opath = f"DNN_{t.tm_mon:02d}{t.tm_mday:02d}{t.tm_year-2000:02d}_{t.tm_hour:02d}{t.tm_min:02d}"
 callbacks = [
     keras.callbacks.ModelCheckpoint(
-        filepath='models/keras/model_{epoch}',
-        save_freq='epoch',# period=200,
-        ),#save_best_only=True),
-    # keras.callbacks.EarlyStopping(monitor='val_loss', patience=20)
+        filepath='models/DNN/'+opath,
+        save_freq='epoch', period=8,
+        save_best_only=True),
+    keras.callbacks.EarlyStopping(monitor='val_loss', patience=16, restore_best_weights=True),
+    keras.callbacks.TensorBoard()
 ]
-
-batch_size = 32
-epochs = 200
 
 X_train_transformed = scaler.transform(X_train)
 y_train_transformed = lb.transform(y_train)
@@ -131,29 +142,43 @@ y_test_transformed = lb.transform(y_test)
 # Test loss: 1.281967043876648 / Test accuracy: 0.4468725621700287 / Test AUC: 0.8182138800621033
 # 
 ##########################################################################################################
-# train_size = int(1-1/5*len(y_train))
 
-# tuner = keras_tuner.RandomSearch(
-#     my_hp_model,
-#     objective='val_auc',#'val_loss',
-#     max_trials=1000)
+train_size = int(3/4*len(y_train))
+batch_size = 32
+epochs = 64
+tuner = keras_tuner.RandomSearch(
+    my_hp_model,
+    objective='val_loss',
+    max_trials=8192)
 
-# tuner.search(X_train_transformed[:train_size, :], y_train_transformed[:train_size, :], 
-#             validation_data=(X_train_transformed[train_size:, :], y_train_transformed[train_size:, :]),
-#             batch_size=batch_size, epochs=epochs, callbacks=callbacks)
+tuner.search(X_train_transformed[:train_size, :], y_train_transformed[:train_size], 
+            validation_data=(X_train_transformed[train_size:, :], y_train_transformed[train_size:]),
+            batch_size=batch_size, epochs=epochs, callbacks=callbacks)
 
-# model = tuner.get_best_models()[0]
+
+model = tuner.get_best_models()[0]
 
 ###########################################################################################################
 
-model = my_model(X_train.shape[1], len(lb.classes_))
-epochs = 100
+# with downsampled lay0 to max of other layers and 3 layers of 64 each and 0.1 dropout
+# Test loss: 1.241578221321106 / Test accuracy: 0.46937745809555054 / Test AUC: 0.8331909775733948
+
+# with all samples at equal priors
+# Test loss: 1.330015778541565 / Test accuracy: 0.4305014908313751 / Test AUC: 0.8071685433387756
+
+
+# model = my_model(X_train.shape[1], len(lb.classes_))
+epochs = 512
+batch_size = 16
 
 model.summary()
 plot_model(model, to_file='imgs/generator_plot.png', show_shapes=True, show_layer_names=True)
 
-model.fit(X_train_transformed, y_train_transformed, validation_split=1/3, 
+try:
+    model.fit(X_train_transformed, y_train_transformed, validation_data=(X_test_transformed, y_test_transformed), 
             batch_size=batch_size, epochs=epochs, callbacks=callbacks)
+except KeyboardInterrupt:
+    pass
 
 ###########################################################################################################
 
@@ -161,4 +186,4 @@ score = model.evaluate(X_test_transformed, y_test_transformed, verbose=0)
 print(f'Test loss: {score[0]} / Test accuracy: {score[1]} / Test AUC: {score[2]}')
 
 t = localtime()
-model.save(f"models/DNN_{t.tm_mon:02d}{t.tm_mday:02d}{t.tm_year-2000:02d}_{t.tm_hour:02d}{t.tm_min:02d}.model")
+model.save(f"models/DNN/"+opath)

@@ -9,7 +9,7 @@ from load_data import load_data
 from joblib import dump
 
 from sklearn.multiclass import OneVsOneClassifier,  OneVsRestClassifier
-from sklearn.preprocessing import StandardScaler,  LabelBinarizer
+from sklearn.preprocessing import StandardScaler,  LabelBinarizer, MinMaxScaler
 from sklearn.model_selection import GridSearchCV
 
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier,  GradientBoostingClassifier
@@ -23,18 +23,19 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import roc_auc_score, balanced_accuracy_score, accuracy_score
 
 np.random.seed(42)
-
+n_jobs = 8 
 fname = "data/SR-PHOTONS-LUND-NOFMT-20bun-for-Andrey-NoAU.events.root"; oname = "NoAU"
 # fname = "data/SR-PHOTONS-LUND-NOFMT-20bun-for-Andrey-AU.events.root"; oname = "AU"
-(X_train, X_test, y_train, y_test), rdf = load_data(fname, .8, add_cols=True, discard_data=True)
+X_train, X_test, y_train, y_test, rdf = load_data(fname, 1/2, add_cols=True, discard_data=True, upsample=True)
 
 # lb = MultiLabelBinarizer()
 # lb.fit(np.r_[y_train,y_test])
 lb = LabelBinarizer() 
-lb.fit(np.append(y_train,y_test))
+lb.fit(sorted(y_train))
 
-scaler = StandardScaler() 
-scaler.fit(np.r_[X_train,X_test])
+# scaler = StandardScaler() 
+scaler = MinMaxScaler() 
+scaler.fit(X_train)
 
 X_train_transformed = scaler.transform(X_train)
 y_train_transformed = lb.transform(y_train)
@@ -45,7 +46,7 @@ def train(X, y, clf, param_grid, out):
     t1, t1p = time(), process_time()
     clf = Pipeline([('scaler', StandardScaler()),
                     (out, clf)])
-    grid_search = GridSearchCV(clf, param_grid, scoring='balanced_accuracy', cv=3, n_jobs=16, return_train_score=True, verbose=100)
+    grid_search = GridSearchCV(clf, param_grid, scoring='balanced_accuracy', cv=3, n_jobs=n_jobs, return_train_score=True, verbose=100)
     grid_search.fit(X, y)
 
     tt, ttp = time()-t1, process_time()-t1p
@@ -53,27 +54,27 @@ def train(X, y, clf, param_grid, out):
     print(f"Finished fitting {out}:\tElapsed time {ttp//60**2:02.0f}:{ttp//60:02.0f}:{ttp%60:02.0f}"+
             f" process, {tt//60**2:02.0f}:{tt//60:02.0f}:{tt%60:02.0f} clock")
     
-    dump(grid_search, f"models/{out}_{t.tm_mon:02d}{t.tm_mday:02d}{t.tm_year-2000:02d}_{t.tm_hour:02d}{t.tm_min:02d}.model")
+    dump(grid_search, f"models/{out}/{out}_{t.tm_mon:02d}{t.tm_mday:02d}{t.tm_year-2000:02d}_{t.tm_hour:02d}{t.tm_min:02d}.model")
 
     return grid_search
 
 clfs = np.array([ RandomForestClassifier(), 
                   AdaBoostClassifier(), 
-                  GradientBoostingClassifier(), 
-                  LinearSVC(), 
-                  GaussianNB(), 
-                #   KNeighborsClassifier(), 
-                  QuadraticDiscriminantAnalysis() ] )
+                  GradientBoostingClassifier(), ])
+                #   LinearSVC(), 
+                #   GaussianNB(), 
+                # #   KNeighborsClassifier(), 
+                #   QuadraticDiscriminantAnalysis() ] )
 
-param_grids = [ { 'random_forest__n_estimators' : [3, 10, 30, 100, 200, 300], 'random_forest__max_features' : [1, 3, 6], 'random_forest__class_weight' : ['balanced'] },
+param_grids = [ { 'random_forest__n_estimators' : [10, 20, 30, 40, 50, 75, 100, 150, 200, 250, 500, 1000, 2000], 'random_forest__max_features' : [1, 3, 6, 8, 10, 12, 14, 16], 'random_forest__class_weight' : ['balanced'] },
                 { 'adaboost__base_estimator' : [DecisionTreeClassifier(max_depth=1, class_weight='balanced'), DecisionTreeClassifier(max_depth=10, class_weight='balanced')], 
-                    'adaboost__learning_rate' : [0.01, 0.1, 1], 'adaboost__n_estimators' : [10, 50, 100, 200] },
-                { 'gradient_boost__learning_rate' : [0.01, 0.1, 1], 'gradient_boost__n_estimators' : [10, 50, 100] },
-                { 'linearSVC__C' : [0.0001, 0.001, 0.01, 0.1, 1, 10, 100], 'linearSVC__class_weight' : ['balanced'] },
-                { 'gaussianNB__var_smoothing' : [1e-9] },
-                # { 'knn__n_neighbors' : [1, 2, 3, 10] },
-                { 'quad_discrim__tol' : [1e-4] } ]
-clfs_names = np.array([ "random_forest", "adaboost", "gradient_boost", "linearSVC", "gaussianNB", "quad_discrim"])#"knn",
+                    'adaboost__learning_rate' : [0.01, 0.1, 1], 'adaboost__n_estimators' : [10, 20, 30, 40, 50, 75, 100, 150, 200, 250, 500, 1000, 2000] },
+                { 'gradient_boost__learning_rate' : [0.01, 0.1, 1], 'gradient_boost__n_estimators' : [10, 20, 30, 40, 50, 75, 100, 150, 200, 250, 500, 1000, 2000] }, ]
+                # { 'linearSVC__C' : [0.0001, 0.001, 0.01, 0.1, 1, 10, 100], 'linearSVC__class_weight' : ['balanced'] },
+                # { 'gaussianNB__var_smoothing' : [1e-9] },
+                # # { 'knn__n_neighbors' : [1, 2, 3, 10] },
+                # { 'quad_discrim__tol' : [1e-4] } ]
+clfs_names = np.array([ "random_forest", "adaboost", "gradient_boost",])# "linearSVC", "gaussianNB", "quad_discrim"])#"knn",
 
 for i in range(len(clfs)):
     clfs[i] = train(X_train_transformed, y_train, clfs[i], param_grids[i], clfs_names[i])

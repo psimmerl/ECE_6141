@@ -7,3 +7,9 @@ assignments/completed/project/models/*
 *.pdf
 *.zip
 *.out
+*.synctex.gz
+*.tex
+*.bib
+*.cls
+assignments/completed/project/untitled_project/*
+assignments/completed/project/logs/*
